@@ -297,7 +297,7 @@ a{color:inherit;text-decoration:none}
     <div class="lf-err" id="authErr"></div>
     <button class="lf-btn" id="authBtn" onclick="doAuth()">Sign In</button>
   </div>
-  <div class="login-footer">Demo: any email + any password (6+ chars) · Data simulated for demonstration</div>
+  <div class="login-footer">NYSE · NASDAQ · Real-time data powered by Finnhub</div>
 </div>
 
 <!-- ======================================================= -->
@@ -701,17 +701,18 @@ let currentStock='AAPL';
 let sectorTF='1D';
 let newsFilter='all';
 let loginMode='signin';
+let _intervals=[];  // track all intervals for cleanup on logout
 
 // =========================================================
 //  UTILS
 // =========================================================
 const rnd=(a,b)=>Math.random()*(b-a)+a;
-const fmtN=(n,d=2)=>Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
-const fmtV=n=>n>=1e9?(n/1e9).toFixed(1)+'B':n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(0)+'K':String(n);
-const pct=(p,pr)=>((p-pr)/pr*100);
+const fmtN=(n,d=2)=>{const v=Number(n);return(isNaN(v)||!isFinite(v))?'—':v.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});};
+const fmtV=n=>(!n||isNaN(n))?'—':n>=1e9?(n/1e9).toFixed(1)+'B':n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(0)+'K':String(n);
+const pct=(p,pr)=>(!pr||pr===0)?0:((p-pr)/pr*100);
 const chgC=n=>n>=0?'var(--green)':'var(--red)';
-const sign=n=>n>=0?'+':'';
-const cls=n=>n>=0?'up':'dn';
+const sign=n=>(!n||isNaN(n))?'':n>=0?'+':'';
+const cls=n=>(!isNaN(n)&&n<0)?'dn':'up';
 const bgCls=n=>n>=0?'up-bg':'dn-bg';
 
 function toast(msg,type=''){
@@ -724,16 +725,24 @@ function toast(msg,type=''){
 
 function saveState(){
   if(!currentUser)return;
-  localStorage.setItem('mp_wl_'+currentUser,JSON.stringify(watchlist));
-  localStorage.setItem('mp_port_'+currentUser,JSON.stringify(portfolio));
-  localStorage.setItem('mp_alerts_'+currentUser,JSON.stringify(alerts));
+  try{
+    localStorage.setItem('mp_wl_'+currentUser,JSON.stringify(watchlist));
+    localStorage.setItem('mp_port_'+currentUser,JSON.stringify(portfolio));
+    localStorage.setItem('mp_alerts_'+currentUser,JSON.stringify(alerts));
+  }catch(e){console.warn('Storage unavailable — data will not persist',e);}
 }
 
 function loadState(){
   if(!currentUser)return;
-  watchlist=JSON.parse(localStorage.getItem('mp_wl_'+currentUser)||'["AAPL","TSLA","MSFT","NVDA","SPY"]');
-  portfolio=JSON.parse(localStorage.getItem('mp_port_'+currentUser)||'[]');
-  alerts=JSON.parse(localStorage.getItem('mp_alerts_'+currentUser)||'[]');
+  try{
+    watchlist=JSON.parse(localStorage.getItem('mp_wl_'+currentUser)||'["AAPL","TSLA","MSFT","NVDA","SPY"]');
+    portfolio=JSON.parse(localStorage.getItem('mp_port_'+currentUser)||'[]');
+    alerts=JSON.parse(localStorage.getItem('mp_alerts_'+currentUser)||'[]');
+  }catch(e){
+    console.warn('Storage read failed — using defaults',e);
+    watchlist=['AAPL','TSLA','MSFT','NVDA','SPY'];
+    portfolio=[];alerts=[];
+  }
 }
 
 // =========================================================
@@ -756,7 +765,9 @@ function doAuth(){
     const email=document.getElementById('liEmail').value.trim();
     const pass=document.getElementById('liPass').value;
     if(!email||!pass){showAuthErr('Please enter email and password.');return;}
-    const users=JSON.parse(localStorage.getItem('mp_users')||'{}');
+    let users={};
+    try{users=JSON.parse(localStorage.getItem('mp_users')||'{}');}
+    catch(e){showAuthErr('Unable to read accounts — try a non-private browser window.');return;}
     if(!users[email]){showAuthErr('Account not found. Please register first.');return;}
     if(users[email].pass!==btoa(pass)){showAuthErr('Incorrect password.');return;}
     currentUser=email;
@@ -768,10 +779,14 @@ function doAuth(){
     if(!name||!email||!pass){showAuthErr('Please fill in all fields.');return;}
     if(pass.length<6){showAuthErr('Password must be at least 6 characters.');return;}
     if(!email.includes('@')){showAuthErr('Please enter a valid email.');return;}
-    const users=JSON.parse(localStorage.getItem('mp_users')||'{}');
-    if(users[email]){showAuthErr('Email already registered. Please sign in.');return;}
+    let users2={};
+    try{users2=JSON.parse(localStorage.getItem('mp_users')||'{}');}
+    catch(e){users2={};}
+    if(users2[email]){showAuthErr('Email already registered. Please sign in.');return;}
+    const users=users2;
     users[email]={name,pass:btoa(pass)};
-    localStorage.setItem('mp_users',JSON.stringify(users));
+    try{localStorage.setItem('mp_users',JSON.stringify(users));}
+    catch(e){showAuthErr('Unable to save account — storage may be full or blocked.');return;}
     currentUser=email;
     launchApp(name);
   }
@@ -792,6 +807,9 @@ function launchApp(name){
 
 function doLogout(){
   saveState();
+  // Clear all intervals to prevent stacking on re-login
+  _intervals.forEach(id=>clearInterval(id));
+  _intervals=[];
   currentUser=null;
   document.getElementById('mainApp').style.display='none';
   document.getElementById('loginScreen').style.display='flex';
@@ -1917,7 +1935,7 @@ async function init(){
   },8000);
 
   // Phase 6: Auto-refresh every 30s
-  setInterval(async()=>{
+  _intervals.push(setInterval(async()=>{
     const syms=[...new Set([...coreSyms,...watchlist])].slice(0,15);
     const n=await loadQuotes(syms);
     if(n>0){
@@ -1928,15 +1946,15 @@ async function init(){
         if(!a._fired){a._fired=true;toast('\uD83D\uDD14 '+a.sym+' alert triggered!','warn');}
       });
     }
-  },30000);
+  },30000));
 
   // Phase 7: Micro-tick visual animation between real refreshes
-  setInterval(()=>{
+  _intervals.push(setInterval(()=>{
     if(!apiLive){
       Object.keys(DB).forEach(sym=>{if(DB[sym].p>0)DB[sym].p=parseFloat((DB[sym].p*(1+rnd(-.0005,.0005))).toFixed(2));});
       renderTicker();renderWatchlist();
     }
-  },5000);
+  },5000));
 }
 
 </script>
