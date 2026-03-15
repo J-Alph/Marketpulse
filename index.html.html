@@ -315,9 +315,7 @@ a{color:inherit;text-decoration:none}
   </div>
   <div class="ticker-tape" id="tickerTape"></div>
   <div style="display:flex;align-items:center;gap:.6rem;flex-shrink:0">
-    <span style="font-size:.68rem;color:var(--muted)">
-      <span class="api-dot api-sim"></span>Simulated
-    </span>
+    <span style="font-size:.68rem;color:var(--muted)" id="apiStatus"><span class="api-dot api-sim" id="apiDot"></span><span id="apiLabel">Connecting...</span></span>
     <button class="btn btn-ghost btn-sm" onclick="refreshAll()">⟳</button>
     <button class="btn btn-ghost btn-sm" onclick="showView('portfolio')">💼</button>
     <button class="btn btn-ghost btn-sm" onclick="showView('alerts')">🔔 <span id="alertBadge"></span></button>
@@ -809,47 +807,6 @@ function renderTicker(){
     `Market Open · ${new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})} ET · NYSE & NASDAQ`;
 }
 
-// =========================================================
-//  SEARCH — covers all DB symbols (NYSE + NASDAQ)
-// =========================================================
-function handleSearch(q){
-  const dd=document.getElementById('srchDd');
-  q=q.trim();
-  if(!q){dd.classList.remove('open');return;}
-  const uq=q.toUpperCase();
-  const matches=Object.keys(DB).filter(s=>s.startsWith(uq)||DB[s].n.toUpperCase().includes(uq)).slice(0,8);
-  if(!matches.length){dd.classList.remove('open');return;}
-  dd.innerHTML=matches.map(sym=>{
-    const s=DB[sym];const c=pct(s.p,s.pr);
-    return`<div class="sd-item" onclick="goStock('${sym}')">
-      <div style="display:flex;align-items:center;gap:.6rem">
-        <span class="sd-sym">${sym}</span>
-        <span class="sd-exch">${s.ex}</span>
-        <span class="sd-name">${s.n}</span>
-      </div>
-      <div style="text-align:right">
-        <div class="mono" style="font-size:.78rem">${fmtN(s.p)}</div>
-        <div class="${cls(c)}" style="font-size:.68rem">${sign(c)}${fmtN(c)}%</div>
-      </div>
-    </div>`;
-  }).join('')+`<div class="sd-hint">⏎ Press Enter to open · Also searches Yahoo Finance for any NYSE/NASDAQ ticker</div>`;
-  dd.classList.add('open');
-}
-
-function handleSearchKey(e){
-  if(e.key!=='Enter')return;
-  const q=e.target.value.trim().toUpperCase();
-  if(!q)return;
-  closeDd();
-  const sym=DB[q]?q:Object.keys(DB).find(s=>s.startsWith(q)||DB[s].n.toUpperCase().includes(q));
-  if(sym){e.target.value='';goStock(sym);}
-  else{
-    // Fallback: open Yahoo Finance search for unknown tickers
-    window.open(`https://finance.yahoo.com/quote/${q}`,'_blank','noopener');
-    toast(`Opening Yahoo Finance for ${q} — not in local database`,'warn');
-    e.target.value='';
-  }
-}
 function closeDd(){document.getElementById('srchDd').classList.remove('open');}
 
 // =========================================================
@@ -1493,18 +1450,215 @@ function removeAlert(i){
   alerts.splice(i,1);saveState();renderAlerts();toast('Alert removed');
 }
 
+
+// =========================================================
+//  FINNHUB LIVE API ENGINE
+// =========================================================
+const FKEY  = 'd6rf6r1r01qr194mf5mgd6rf6r1r01qr194mf5n0';
+const FBASE = 'https://finnhub.io/api/v1';
+let apiLive = false;
+
+function fmtMC(v){
+  if(v>=1e12)return(v/1e12).toFixed(2)+'T';
+  if(v>=1e9) return(v/1e9).toFixed(1)+'B';
+  if(v>=1e6) return(v/1e6).toFixed(0)+'M';
+  return String(v);
+}
+
+async function fhQuote(sym){
+  try{
+    const r=await fetch(`${FBASE}/quote?symbol=${sym}&token=${FKEY}`);
+    if(!r.ok)throw new Error(r.status);
+    const d=await r.json();
+    if(d&&d.c>0){
+      if(!DB[sym])DB[sym]={n:sym,ex:'NYSE/NASDAQ',sec:'Unknown',p:0,pr:0,o:0,h:0,l:0,vol:0,mc:'N/A',pe:0,eps:0,div:0,yi:0,be:1,h52:0,l52:0,ma50:0,ma200:0,roe:0,roa:0,mg:0,dbt:0,csh:0,rev:'N/A',rg:0,rat:'N/A',pt:0};
+      DB[sym].p  = parseFloat(d.c.toFixed(2));
+      DB[sym].o  = parseFloat((d.o||d.c).toFixed(2));
+      DB[sym].h  = parseFloat((d.h||d.c).toFixed(2));
+      DB[sym].l  = parseFloat((d.l||d.c).toFixed(2));
+      DB[sym].pr = parseFloat((d.pc||d.c).toFixed(2));
+      return true;
+    }
+  }catch(e){console.warn('Finnhub quote',sym,e.message);}
+  return false;
+}
+
+async function fhProfile(sym){
+  try{
+    const r=await fetch(`${FBASE}/stock/profile2?symbol=${sym}&token=${FKEY}`);
+    if(!r.ok)return;
+    const d=await r.json();
+    if(d&&d.name){
+      DB[sym]=DB[sym]||{};
+      DB[sym].n  =d.name;
+      DB[sym].ex =d.exchange?d.exchange.toUpperCase().includes('NASDAQ')?'NASDAQ':'NYSE':(DB[sym].ex||'NYSE');
+      DB[sym].sec=d.finnhubIndustry||(DB[sym].sec||'Unknown');
+      if(d.marketCapitalization)DB[sym].mc=fmtMC(d.marketCapitalization*1e6);
+      if(d.logo)DB[sym].logo=d.logo;
+    }
+  }catch(e){console.warn('Profile',sym,e.message);}
+}
+
+async function fhMetrics(sym){
+  try{
+    const r=await fetch(`${FBASE}/stock/metric?symbol=${sym}&metric=all&token=${FKEY}`);
+    if(!r.ok)return;
+    const m=(await r.json()).metric||{};
+    const s=DB[sym]={...(DB[sym]||{})};
+    if(m['52WeekHigh'])          s.h52  =parseFloat(m['52WeekHigh'].toFixed(2));
+    if(m['52WeekLow'])           s.l52  =parseFloat(m['52WeekLow'].toFixed(2));
+    if(m['10DayAverageTradingVolume'])s.vol=Math.round(m['10DayAverageTradingVolume']*1e6);
+    if(m.peBasicExclExtraTTM)    s.pe   =parseFloat(m.peBasicExclExtraTTM.toFixed(1));
+    if(m.epsBasicExclExtraItemsTTM)s.eps =parseFloat(m.epsBasicExclExtraItemsTTM.toFixed(2));
+    if(m['50DayMovingAverage'])  s.ma50 =parseFloat(m['50DayMovingAverage'].toFixed(2));
+    if(m['200DayMovingAverage']) s.ma200=parseFloat(m['200DayMovingAverage'].toFixed(2));
+    if(m.roeTTM)                 s.roe  =parseFloat(m.roeTTM.toFixed(1));
+    if(m.roaTTM)                 s.roa  =parseFloat(m.roaTTM.toFixed(1));
+    if(m.netProfitMarginTTM)     s.mg   =parseFloat(m.netProfitMarginTTM.toFixed(1));
+    if(m.betaShares)             s.be   =parseFloat(m.betaShares.toFixed(2));
+    if(m.revenueGrowthQuarterlyYoy)s.rg =parseFloat((m.revenueGrowthQuarterlyYoy*100).toFixed(1));
+    if(m.totalDebt)              s.dbt  =parseFloat((m.totalDebt/1e9).toFixed(1));
+    if(m.cashAndShortTermInvestments)s.csh=parseFloat((m.cashAndShortTermInvestments/1e9).toFixed(1));
+    if(m.annualDividendPerShareBasic)s.div=parseFloat(m.annualDividendPerShareBasic.toFixed(2));
+    if(m.dividendYieldIndicatedAnnual)s.yi=parseFloat(m.dividendYieldIndicatedAnnual.toFixed(2));
+    DB[sym]=s;
+  }catch(e){console.warn('Metrics',sym,e.message);}
+}
+
+async function fhRec(sym){
+  try{
+    const r=await fetch(`${FBASE}/stock/recommendation?symbol=${sym}&token=${FKEY}`);
+    if(!r.ok)return;
+    const d=await r.json();
+    if(d&&d.length>0){
+      const l=d[0];
+      const tot=(l.strongBuy||0)+(l.buy||0)+(l.hold||0)+(l.sell||0)+(l.strongSell||0);
+      const sc=((l.strongBuy||0)*2+(l.buy||0)*1+(l.hold||0)*0+(l.sell||0)*-1+(l.strongSell||0)*-2)/Math.max(tot,1);
+      DB[sym].rat=sc>1?'Strong Buy':sc>0.3?'Buy':sc>-0.3?'Hold':'Sell';
+      DB[sym]._rec=l;
+    }
+  }catch(e){console.warn('Rec',sym,e.message);}
+}
+
+async function fhSearch(q){
+  try{
+    const r=await fetch(`${FBASE}/search?q=${encodeURIComponent(q)}&token=${FKEY}`);
+    if(!r.ok)return[];
+    const d=await r.json();
+    return(d.result||[]).filter(x=>x.type==='Common Stock'||x.type==='ETP').slice(0,6);
+  }catch(e){return[];}
+}
+
+async function loadQuotes(syms){
+  let ok=0;
+  for(const sym of syms){
+    if(await fhQuote(sym))ok++;
+    await delay(130);
+  }
+  return ok;
+}
+
+async function loadFullStock(sym){
+  toast(`Loading live data for ${sym}...`);
+  await fhQuote(sym);await delay(130);
+  await fhProfile(sym);await delay(130);
+  await fhMetrics(sym);await delay(130);
+  await fhRec(sym);
+  const s=DB[sym];
+  s.h52  =s.h52  ||s.p*1.30;
+  s.l52  =s.l52  ||s.p*0.70;
+  s.ma50 =s.ma50 ||s.p*0.97;
+  s.ma200=s.ma200||s.p*0.91;
+  s.pe   =s.pe   ||0;
+  s.eps  =s.eps  ||0;
+  s.rat  =s.rat  ||'N/A';
+  s.pt   =s.pt   ||0;
+  s.rev  =s.rev  ||'N/A';
+}
+
+function delay(ms){return new Promise(r=>setTimeout(r,ms));}
+
+function setApiStatus(live){
+  apiLive=live;
+  const dot=document.getElementById('apiDot');
+  const lbl=document.getElementById('apiLabel');
+  if(!dot||!lbl)return;
+  if(live){dot.className='api-dot api-live';lbl.textContent='Live \u2014 Finnhub';lbl.style.color='var(--green)';}
+  else{dot.className='api-dot api-sim';lbl.textContent='Simulated';lbl.style.color='';}
+}
+
+// =========================================================
+//  SEARCH — Finnhub live + local DB
+// =========================================================
+let srchTimer=null;
+function handleSearch(q){
+  const dd=document.getElementById('srchDd');
+  if(!q.trim()){dd.classList.remove('open');return;}
+  dd.innerHTML='<div class="srch-loading">Searching NYSE &amp; NASDAQ...</div>';
+  dd.classList.add('open');
+  clearTimeout(srchTimer);
+  srchTimer=setTimeout(async()=>{
+    const uq=q.trim().toUpperCase();
+    const local=Object.keys(DB).filter(s=>s.startsWith(uq)||DB[s].n.toUpperCase().includes(uq)).slice(0,4);
+    const live=await fhSearch(q.trim());
+    const liveF=live.filter(x=>!local.includes(x.symbol));
+    if(!local.length&&!liveF.length){dd.classList.remove('open');return;}
+    dd.innerHTML=[
+      ...local.map(sym=>{
+        const s=DB[sym];const c=s.pr?pct(s.p,s.pr):0;
+        return`<div class="sd-item" onclick="goStock('${sym}')">
+          <div style="display:flex;align-items:center;gap:.6rem">
+            <span class="sd-sym">${sym}</span><span class="sd-exch">${s.ex||''}</span>
+            <span class="sd-name">${s.n}</span></div>
+          <div style="text-align:right">
+            <div class="mono" style="font-size:.78rem">${fmtN(s.p)}</div>
+            <div class="${cls(c)}" style="font-size:.68rem">${sign(c)}${fmtN(c)}%</div>
+          </div></div>`;
+      }),
+      ...liveF.map(x=>`<div class="sd-item" onclick="goStockLive('${x.symbol}','${(x.description||'').replace(/'/g,'')}')" style="opacity:.85">
+        <div style="display:flex;align-items:center;gap:.6rem">
+          <span class="sd-sym">${x.symbol}</span><span class="sd-exch">${x.displaySymbol||''}</span>
+          <span class="sd-name">${x.description||''}</span></div>
+        <div style="font-size:.63rem;color:var(--green)">Load Live</div></div>`)
+    ].join('')+'<div class="sd-hint">\u23ce Press Enter to open full page</div>';
+  },320);
+}
+
+function handleSearchKey(e){
+  if(e.key!=='Enter')return;
+  const q=e.target.value.trim().toUpperCase();
+  if(!q)return;
+  closeDd();
+  if(DB[q]){e.target.value='';goStock(q);return;}
+  const local=Object.keys(DB).find(s=>s.startsWith(q)||DB[s].n.toUpperCase().includes(q));
+  if(local){e.target.value='';goStock(local);return;}
+  e.target.value='';
+  goStockLive(q,q);
+}
+
+async function goStockLive(sym,name){
+  closeDd();
+  document.getElementById('srchInp').value='';
+  if(!DB[sym]){
+    DB[sym]={n:name||sym,ex:'NYSE/NASDAQ',sec:'Unknown',p:0,pr:0,o:0,h:0,l:0,
+      vol:0,mc:'N/A',pe:0,eps:0,div:0,yi:0,be:1,h52:0,l52:0,
+      ma50:0,ma200:0,roe:0,roa:0,mg:0,dbt:0,csh:0,rev:'N/A',rg:0,rat:'N/A',pt:0};
+  }
+  await loadFullStock(sym);
+  goStock(sym);
+}
+
 // =========================================================
 //  REFRESH
 // =========================================================
-function refreshAll(){
-  Object.keys(DB).forEach(sym=>{
-    DB[sym].p=parseFloat((DB[sym].p*(1+rnd(-.004,.004))).toFixed(2));
-  });
+async function refreshAll(){
+  toast('Fetching live prices...');
+  const syms=[...new Set([...['SPY','QQQ','AAPL','MSFT','NVDA','TSLA','META','AMZN','GOOGL','JPM'],...watchlist])].slice(0,12);
+  const ok=await loadQuotes(syms);
+  if(ok>0)setApiStatus(true);
   renderTicker();renderWatchlist();updateAlertBadge();
-  // Check triggered alerts
-  const triggered=alerts.filter(a=>checkAlertTriggered(a));
-  triggered.forEach(a=>toast(`🔔 Alert triggered: ${a.sym} — ${a.cond} ${a.val}`,'warn'));
-  toast('Market data refreshed');
+  alerts.filter(a=>checkAlertTriggered(a)).forEach(a=>toast('\uD83D\uDD14 Alert: '+a.sym+' \u2014 '+a.cond+' $'+a.val,'warn'));
+  toast('Data updated \u2014 '+ok+' live quotes fetched');
   const v=document.querySelector('.view.active');
   if(v){
     if(v.id==='v-dashboard')renderDashboard();
@@ -1517,23 +1671,44 @@ function refreshAll(){
 // =========================================================
 //  INIT
 // =========================================================
-function init(){
-  renderTicker();
-  renderWatchlist();
-  renderDashboard();
-  updateAlertBadge();
-  // Auto-update prices every 6 seconds
+async function init(){
+  // Render seed data immediately
+  renderTicker();renderWatchlist();renderDashboard();updateAlertBadge();
+
+  // Fetch live quotes
+  const tapeSyms=['SPY','QQQ','AAPL','MSFT','NVDA','TSLA','META','AMZN','GOOGL','JPM','XOM','NFLX'];
+  toast('Connecting to Finnhub live feed...');
+  const ok=await loadQuotes(tapeSyms);
+  if(ok>0){
+    setApiStatus(true);
+    renderTicker();renderWatchlist();renderDashboard();
+    toast('Live feed connected \u2014 '+ok+' quotes loaded');
+  } else {
+    setApiStatus(false);
+    toast('Live feed unavailable \u2014 using simulated data','warn');
+  }
+
+  // Auto-refresh every 30 seconds
+  setInterval(async()=>{
+    const syms=[...new Set([...tapeSyms,...watchlist])].slice(0,12);
+    const n=await loadQuotes(syms);
+    if(n>0){
+      setApiStatus(true);renderTicker();renderWatchlist();updateAlertBadge();
+      alerts.filter(a=>checkAlertTriggered(a)).forEach(a=>{
+        if(!a._fired){a._fired=true;toast('\uD83D\uDD14 '+a.sym+' alert triggered!','warn');}
+      });
+    }
+  },30000);
+
+  // Micro-tick simulation between real refreshes
   setInterval(()=>{
-    Object.keys(DB).forEach(sym=>{
-      DB[sym].p=parseFloat((DB[sym].p*(1+rnd(-.0008,.0008))).toFixed(2));
-    });
-    renderTicker();renderWatchlist();updateAlertBadge();
-    // Fire alert toasts for triggered ones
-    alerts.filter(a=>checkAlertTriggered(a)).forEach(a=>{
-      if(!a._fired){a._fired=true;toast(`🔔 ${a.sym} alert triggered!`,'warn');}
-    });
-  },6000);
+    if(!apiLive){
+      Object.keys(DB).forEach(sym=>{DB[sym].p=parseFloat((DB[sym].p*(1+rnd(-.0005,.0005))).toFixed(2));});
+      renderTicker();renderWatchlist();
+    }
+  },5000);
 }
+
 </script>
 </body>
 </html>
