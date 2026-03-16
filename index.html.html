@@ -1028,7 +1028,7 @@ function renderMovers(){
   document.getElementById('losers').innerHTML=loss.map(x=>row(x,'l')).join('');
 }
 
-async async function renderDashNews(){
+async function renderDashNews(){
   document.getElementById('dashNews').innerHTML='<div style="padding:1rem;color:var(--muted);font-size:.8rem">Loading live market news...</div>';
   try{
     const r=await fetch(`${FBASE}/news?category=general&token=${FKEY}`);
