@@ -272,86 +272,25 @@ a{color:inherit;text-decoration:none}
 </style>
 
 <!-- Firebase SDK -->
-<script type="module">
-import{initializeApp}from'https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js';
-import{getAuth,createUserWithEmailAndPassword,signInWithEmailAndPassword,signOut,onAuthStateChanged,updateProfile}from'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js';
-import{getFirestore,doc,setDoc,getDoc,updateDoc}from'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
 
-const firebaseConfig={
-  apiKey:"AIzaSyAt1Cpe7229Wum76h-5Q19x0lXdeuSmTg4",
-  authDomain:"myapps-dd33a.firebaseapp.com",
-  projectId:"myapps-dd33a",
-  storageBucket:"myapps-dd33a.firebasestorage.app",
-  messagingSenderId:"168081008527",
-  appId:"1:168081008527:web:c264afa53e4c7dc55f4dfa"
+<!-- Firebase Compat SDK (no imports needed, works in regular scripts) -->
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+<script>
+// Initialize Firebase — runs immediately, synchronously
+const firebaseConfig = {
+  apiKey: "AIzaSyAt1Cpe7229Wum76h-5Q19x0lXdeuSmTg4",
+  authDomain: "myapps-dd33a.firebaseapp.com",
+  projectId: "myapps-dd33a",
+  storageBucket: "myapps-dd33a.firebasestorage.app",
+  messagingSenderId: "168081008527",
+  appId: "1:168081008527:web:c264afa53e4c7dc55f4dfa"
 };
-
-const fbApp=initializeApp(firebaseConfig);
-const fbAuth=getAuth(fbApp);
-const fbDb=getFirestore(fbApp);
-
-// Expose to global scope for use in main script
-window._fbAuth=fbAuth;
-window._fbDb=fbDb;
-window._fbFns={
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  updateProfile,
-  doc,setDoc,getDoc,updateDoc
-};
-
-// Listen for auth state changes
-onAuthStateChanged(fbAuth,async(user)=>{
-  if(user){
-    // Load user data from Firestore
-    try{
-      const snap=await getDoc(doc(fbDb,'mp_users',user.uid));
-      if(snap.exists()){
-        const data=snap.data();
-        window._fbUserData=data;
-        window._currentUserName=data.name||user.displayName||'User'; // Store name
-        // Update UI
-        const btn=document.getElementById('userBtn');
-        if(btn)btn.textContent='👤 '+(data.name||user.displayName||'User').split(' ')[0];
-        // Load cloud state into app
-        if(window._appReady){
-          window.watchlist=data.watchlist||['AAPL','TSLA','MSFT','NVDA','SPY'];
-          window.portfolio=data.portfolio||[];
-          window.alerts=data.alerts||[];
-          if(window.renderWatchlist)window.renderWatchlist();
-          if(window.renderDashboard)window.renderDashboard();
-          if(window.updateAlertBadge)window.updateAlertBadge();
-        }
-      }
-    }catch(e){console.warn('Firestore load error:',e);}
-  }
-});
-
-// Cloud save function — called whenever data changes
-window.cloudSave=async function(){
-  const user=window._fbAuth?.currentUser;
-  if(!user)return;
-  try{
-    await updateDoc(doc(fbDb,'mp_users',user.uid),{
-      watchlist:window.watchlist||[],
-      portfolio:window.portfolio||[],
-      alerts:(window.alerts||[]).map(a=>({sym:a.sym,cond:a.cond,val:a.val})),
-      lastSaved:new Date().toISOString()
-    });
-  }catch(e){
-    // Doc may not exist yet — create it
-    try{
-      await setDoc(doc(fbDb,'mp_users',user.uid),{
-        watchlist:window.watchlist||[],
-        portfolio:window.portfolio||[],
-        alerts:(window.alerts||[]).map(a=>({sym:a.sym,cond:a.cond,val:a.val})),
-        lastSaved:new Date().toISOString()
-      });
-    }catch(e2){console.warn('Cloud save error:',e2);}
-  }
-};
+firebase.initializeApp(firebaseConfig);
+const fbAuth = firebase.auth();
+const fbDb   = firebase.firestore();
+console.log('Firebase initialized successfully');
 </script>
 </head>
 <body>
@@ -808,22 +747,15 @@ function toast(msg,type=''){
 
 function saveState(){
   if(!currentUser)return;
-  // Save locally as backup
-  try{
-    localStorage.setItem('mp_wl_bk',JSON.stringify(watchlist));
-    localStorage.setItem('mp_port_bk',JSON.stringify(portfolio));
-  }catch(e){}
-  // Save to Firebase cloud (debounced)
+  // Debounced cloud save — waits 1.5s after last change before saving
   clearTimeout(window._saveTimer);
-  window._saveTimer=setTimeout(()=>{
-    if(window.cloudSave)window.cloudSave().then(()=>console.log('Cloud saved'));
+  window._saveTimer=setTimeout(async()=>{
+    await cloudSave();
   },1500);
 }
 
 function loadState(){
-  // Data is now loaded from Firebase in launchApp()
-  // This function kept for compatibility
-  console.log('State loaded from Firebase cloud');
+  // Loading is now handled by launchApp() using Firebase cloud data
 }
 
 // =========================================================
@@ -844,31 +776,27 @@ async function doAuth(){
   err.style.display='none';
   const btn=document.getElementById('authBtn');
 
-  // Wait for Firebase to be ready
-  if(!window._fbAuth||!window._fbFns){
-    showAuthErr('Connecting to server... please try again in a moment.');return;
-  }
-
   if(loginMode==='signin'){
     const email=document.getElementById('liEmail').value.trim();
     const pass=document.getElementById('liPass').value;
     if(!email||!pass){showAuthErr('Please enter your email and password.');return;}
     btn.textContent='Signing in...';btn.disabled=true;
     try{
-      const cred=await window._fbFns.signInWithEmailAndPassword(window._fbAuth,email,pass);
+      const cred=await fbAuth.signInWithEmailAndPassword(email,pass);
+      const snap=await fbDb.collection('mp_users').doc(cred.user.uid).get();
+      const data=snap.exists?snap.data():{};
       currentUser=cred.user.uid;
-      // Load user data from Firestore
-      const snap=await window._fbFns.getDoc(window._fbFns.doc(window._fbDb,'mp_users',cred.user.uid));
-      const name=snap.exists()?snap.data().name:(cred.user.displayName||'User');
-      launchApp(name,snap.exists()?snap.data():null);
+      window._currentUserName=data.name||cred.user.displayName||'User';
+      launchApp(window._currentUserName, data);
     }catch(e){
-      const msg=e.code==='auth/user-not-found'||e.code==='auth/invalid-credential'?'Account not found. Please register first.':
-                e.code==='auth/wrong-password'?'Incorrect password. Please try again.':
-                e.code==='auth/too-many-requests'?'Too many attempts. Please wait a moment.':
+      const msg=e.code==='auth/user-not-found'||e.code==='auth/invalid-credential'?'Account not found. Please register.':
+                e.code==='auth/wrong-password'||e.code==='auth/invalid-login-credentials'?'Incorrect password.':
+                e.code==='auth/too-many-requests'?'Too many attempts. Please wait.':
                 'Sign in failed: '+e.message;
       showAuthErr(msg);
     }
     btn.textContent='Sign In';btn.disabled=false;
+
   } else {
     const name=document.getElementById('riName').value.trim();
     const email=document.getElementById('riEmail').value.trim();
@@ -878,20 +806,22 @@ async function doAuth(){
     if(!email.includes('@')){showAuthErr('Please enter a valid email.');return;}
     btn.textContent='Creating account...';btn.disabled=true;
     try{
-      const cred=await window._fbFns.createUserWithEmailAndPassword(window._fbAuth,email,pass);
-      await window._fbFns.updateProfile(cred.user,{displayName:name});
-      currentUser=cred.user.uid;
-      // Save initial user data to Firestore
-      await window._fbFns.setDoc(window._fbFns.doc(window._fbDb,'mp_users',cred.user.uid),{
-        name,email,
+      const cred=await fbAuth.createUserWithEmailAndPassword(email,pass);
+      await cred.user.updateProfile({displayName:name});
+      const userData={
+        name, email,
         watchlist:['AAPL','TSLA','MSFT','NVDA','SPY'],
-        portfolio:[],alerts:[],
+        portfolio:[], alerts:[],
         createdAt:new Date().toISOString()
-      });
-      launchApp(name,null);
+      };
+      await fbDb.collection('mp_users').doc(cred.user.uid).set(userData);
+      currentUser=cred.user.uid;
+      window._currentUserName=name;
+      launchApp(name, userData);
+      toast('Account created! Welcome to MarketPulse Pro');
     }catch(e){
       const msg=e.code==='auth/email-already-in-use'?'Email already registered. Please sign in.':
-                e.code==='auth/invalid-email'?'Please enter a valid email address.':
+                e.code==='auth/invalid-email'?'Please enter a valid email.':
                 'Registration failed: '+e.message;
       showAuthErr(msg);
     }
@@ -905,37 +835,39 @@ function showAuthErr(msg){
 }
 
 function launchApp(name, cloudData){
-  window._currentUserName=name; // Store name globally for display
+  window._currentUserName = name;
   document.getElementById('loginScreen').style.display='none';
   document.getElementById('mainApp').style.display='grid';
   document.getElementById('userBtn').textContent='👤 '+name.split(' ')[0];
-  // Load from cloud data if available, otherwise use defaults
-  if(cloudData){
-    watchlist=cloudData.watchlist||['AAPL','TSLA','MSFT','NVDA','SPY'];
-    portfolio=cloudData.portfolio||[];
-    alerts=(cloudData.alerts||[]).map(a=>({sym:a.sym,cond:a.cond,val:a.val}));
-    toast('Welcome back, '+name.split(' ')[0]+'! Your data loaded from cloud ☁️');
+
+  // Load data from cloud if available
+  if(cloudData && cloudData.watchlist){
+    watchlist = cloudData.watchlist || ['AAPL','TSLA','MSFT','NVDA','SPY'];
+    portfolio = cloudData.portfolio || [];
+    alerts    = (cloudData.alerts || []).map(a=>({sym:a.sym,cond:a.cond,val:a.val}));
+    console.log('Loaded from cloud:', watchlist.length, 'watchlist,', portfolio.length, 'portfolio items');
+    toast('Data loaded from cloud ☁️');
   } else {
-    watchlist=['AAPL','TSLA','MSFT','NVDA','SPY'];
-    portfolio=[];alerts=[];
+    watchlist = ['AAPL','TSLA','MSFT','NVDA','SPY'];
+    portfolio = []; alerts = [];
   }
-  window._appReady=true;
+  window._appReady = true;
   init();
 }
 
 async function doLogout(){
-  await cloudSave(); // Save to cloud before logout
+  await cloudSave();
   _intervals.forEach(id=>clearInterval(id));
   _intervals=[];
   currentUser=null;
   window._appReady=false;
-  // Firebase sign out
-  if(window._fbAuth&&window._fbFns)await window._fbFns.signOut(window._fbAuth);
+  window._currentUserName=null;
+  try{ await fbAuth.signOut(); }catch(e){}
   document.getElementById('mainApp').style.display='none';
   document.getElementById('loginScreen').style.display='flex';
   document.getElementById('liEmail').value='';
   document.getElementById('liPass').value='';
-  toast('Signed out. Your data is saved to the cloud.');
+  toast('Signed out — data saved to cloud ☁️');
 }
 
 // =========================================================
@@ -2057,6 +1989,48 @@ async function refreshAll(){
     if(v.id==='v-portfolio')renderPortfolio();
     if(v.id==='v-alerts')renderAlerts();
   }
+}
+
+// =========================================================
+//  FIREBASE CLOUD SAVE & LOAD
+// =========================================================
+async function cloudSave(){
+  if(!currentUser)return;
+  try{
+    const data={
+      watchlist: watchlist||[],
+      portfolio: portfolio||[],
+      alerts: (alerts||[]).map(a=>({sym:a.sym,cond:a.cond,val:a.val})),
+      lastSaved: new Date().toISOString()
+    };
+    await fbDb.collection('mp_users').doc(currentUser).update(data);
+    console.log('Cloud saved at', new Date().toLocaleTimeString());
+  }catch(e){
+    // Doc doesn't exist yet — create it
+    try{
+      await fbDb.collection('mp_users').doc(currentUser).set({
+        name: window._currentUserName||'User',
+        watchlist: watchlist||[],
+        portfolio: portfolio||[],
+        alerts: (alerts||[]).map(a=>({sym:a.sym,cond:a.cond,val:a.val})),
+        createdAt: new Date().toISOString(),
+        lastSaved: new Date().toISOString()
+      });
+      console.log('Cloud document created');
+    }catch(e2){console.warn('Cloud save error:',e2);}
+  }
+}
+
+async function cloudLoad(){
+  if(!currentUser)return null;
+  try{
+    const snap=await fbDb.collection('mp_users').doc(currentUser).get();
+    if(snap.exists){
+      console.log('Cloud data loaded');
+      return snap.data();
+    }
+  }catch(e){console.warn('Cloud load error:',e);}
+  return null;
 }
 
 // =========================================================
