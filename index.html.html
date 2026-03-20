@@ -311,6 +311,7 @@ onAuthStateChanged(fbAuth,async(user)=>{
       if(snap.exists()){
         const data=snap.data();
         window._fbUserData=data;
+        window._currentUserName=data.name||user.displayName||'User'; // Store name
         // Update UI
         const btn=document.getElementById('userBtn');
         if(btn)btn.textContent='👤 '+(data.name||user.displayName||'User').split(' ')[0];
@@ -904,6 +905,7 @@ function showAuthErr(msg){
 }
 
 function launchApp(name, cloudData){
+  window._currentUserName=name; // Store name globally for display
   document.getElementById('loginScreen').style.display='none';
   document.getElementById('mainApp').style.display='grid';
   document.getElementById('userBtn').textContent='👤 '+name.split(' ')[0];
@@ -1656,7 +1658,7 @@ async function runScreener(){
 //  PORTFOLIO
 // =========================================================
 function renderPortfolio(){
-  document.getElementById('portSub').textContent=currentUser?`Account: ${currentUser}`:'';
+  document.getElementById('portSub').textContent=window._currentUserName?`Welcome, ${window._currentUserName}`:'My Portfolio';
   if(!portfolio.length){
     document.getElementById('portSummary').innerHTML='';
     document.getElementById('portBody').innerHTML='';
