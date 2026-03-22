@@ -1137,7 +1137,8 @@ function renderStockPage(sym){
     <button class="btn btn-red btn-sm" onclick="toast('Sell order simulated for ${sym}','err')">Sell</button>
     <button class="btn btn-blue btn-sm" onclick="addToWL('${sym}')">⭐ Watchlist</button>
     <button class="btn btn-gold btn-sm" onclick="openAddAlert('${sym}')">🔔 Set Alert</button>
-    <button class="btn btn-sm" onclick="openStockBrain('${sym}')" style="background:rgba(245,197,66,0.15);color:#f5c542;border:1px solid rgba(245,197,66,0.35);font-family:'Space Mono',monospace;letter-spacing:0.04em;">⚡ Healthy Stock</button>
+    <span style="display:inline-flex;align-items:center;color:rgba(255,255,255,0.15);margin:0 4px;font-size:1.1rem;user-select:none">|</span>
+    <button class="btn btn-sm" onclick="openStockBrain('${sym}')" style="background:linear-gradient(135deg,rgba(245,197,66,0.2),rgba(245,130,66,0.15));color:#f5c542;border:1.5px solid rgba(245,197,66,0.55);font-family:'Space Mono',monospace;letter-spacing:0.05em;font-weight:700;box-shadow:0 0 10px rgba(245,197,66,0.12);">⚡ SignalIQ ↗</button>
     <a class="btn btn-ghost btn-sm" href="https://finance.yahoo.com/quote/${sym}" target="_blank" rel="noopener">Yahoo Finance ↗</a>
     <a class="btn btn-ghost btn-sm" href="https://www.google.com/finance/quote/${sym}:${s.ex}" target="_blank" rel="noopener">Google Finance ↗</a>`;
 
@@ -1962,16 +1963,13 @@ async function goStockLive(sym,name){
 //  STOCKBRAIN INTEGRATION
 // =========================================================
 function openStockBrain(sym){
-  // If running on Vercel, Healthy Stock is on the same domain at /
-  // If running locally, it opens index.html in the same folder
+  // Opens SignalIQ in a new tab with the ticker pre-loaded
   const isVercel = window.location.hostname.includes('vercel.app') || 
                    window.location.hostname.includes('netlify.app') ||
                    (!window.location.hostname.includes('localhost') && window.location.hostname !== '');
   
   let url;
   if (isVercel) {
-    // Same Vercel project — both apps need to be deployed together
-    // Or link to your Healthy Stock Vercel URL directly
     url = 'https://stock-brain-kappa.vercel.app/?ticker=' + encodeURIComponent(sym);
   } else {
     url = 'index.html?ticker=' + encodeURIComponent(sym);
